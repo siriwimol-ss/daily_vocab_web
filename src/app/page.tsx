@@ -1,139 +1,161 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
-import { words } from '@/data/words';
 import { Word, Difficulty } from '@/types';
-import { scoreSentence } from '@/lib/scoring';
+import { ValidateSentenceResponse } from '@/types'; 
+
+//URL Link ของ Backend
+const BACKEND_API_URL = 'http://127.0.0.1:8000/api'; 
+
+interface CurrentWord extends Word {
+    id: number;
+}
 
 export default function Home() {
-    const [currentWord, setCurrentWord] = useState<Word | null>(null);
+    const [currentWord, setCurrentWord] = useState<CurrentWord | null>(null);
     const [sentence, setSentence] = useState<string>('');
-    const [score, setScore] = useState<number>(0);
-    const [feedbackColor, setFeedbackColor] = useState<string>('text-gray-700');
+    const [apiResult, setApiResult] = useState<ValidateSentenceResponse | null>(null);
     const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
+    const [isLoading, setIsLoading] = useState<boolean>(false);
 
     const getRandomWord = useCallback(async () => {
-        // const randomIndex = Math.floor(Math.random() * words.length);
-        // const word = words[randomIndex];
+        setIsLoading(true);
+       try {
+            // ยิงไปที่ http://localhost:8000/api/word (GET)
+            const response = await fetch(`${BACKEND_API_URL}/word`);
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch word');
+            }
 
-        const response = await fetch('/api/word');
-        const word = await response.json();
+            const wordData = await response.json();
 
-        setCurrentWord(word.data);
-        setSentence('');
-        setScore(0);
-        setFeedbackColor('text-gray-700');
-        setIsSubmitted(false);
+            // แปลงข้อมูลจาก Database ให้เข้ากับหน้าเว็บ
+            setCurrentWord({
+                id: wordData.id,
+                word: wordData.word,
+                meaning: wordData.definition, // ใน DB ชื่อ definition
+                difficulty: wordData.difficulty_level as Difficulty // ใน DB ชื่อ difficulty_level
+            });
+            
+            setSentence('');
+            setApiResult(null);
+            setIsSubmitted(false);
+        } catch (error) {
+            console.error("Error fetching random word:", error);
+            alert("ไม่สามารถดึงคำศัพท์ได้ (เช็คว่า Backend รันอยู่ไหม)");
+        } finally {
+            setIsLoading(false);
+        }
     }, []);
 
+    // เรียกใช้ตอนเปิดหน้าเว็บครั้งแรก
     useEffect(() => {
         getRandomWord();
     }, [getRandomWord]);
 
     const handleSentenceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setSentence(e.target.value);
-        // Reset score and feedback if user starts typing again after submission
         if (isSubmitted) {
-            setScore(0);
-            setFeedbackColor('text-gray-700');
+            setApiResult(null);
             setIsSubmitted(false);
         }
     };
 
-    const handleSubmitSentence = () => {
-        if (currentWord) {
-            const newScore = scoreSentence(currentWord.word, sentence);
-            setScore(newScore);
+    const handleSubmitSentence = async () => {
+        if (!currentWord || !sentence.trim() || isLoading) return;
 
-            if (newScore >= 8.0) {
-                setFeedbackColor('text-success');
-            } else if (newScore >= 6.0) {
-                setFeedbackColor('text-warning');
-            } else {
-                setFeedbackColor('text-danger');
+        setIsLoading(true);
+        const payload = {
+            word_id: currentWord.id,
+            sentence: sentence
+        };
+        
+        try {
+            const response = await fetch(`${BACKEND_API_URL}/validate-sentence`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                alert(`API Error: ${errorData.detail || 'Unknown error'}`);
+                return;
             }
 
+            const result: ValidateSentenceResponse = await response.json();
+            setApiResult(result);
+            setIsSubmitted(true);
+            
+            // Save history logic (Optional)
             const history = JSON.parse(localStorage.getItem('wordHistory') || '[]');
             history.push({
                 word: currentWord.word,
                 sentence: sentence,
-                score: newScore,
-                difficulty: currentWord.difficulty,
+                score: result.score,
+                difficulty: result.level,
                 timestamp: new Date().toISOString(),
             });
             localStorage.setItem('wordHistory', JSON.stringify(history));
-            setIsSubmitted(true);
+
+        } catch (error) {
+            console.error("Connect Error:", error);
+            alert("เชื่อมต่อ Backend ไม่ได้!");
+        } finally {
+            setIsLoading(false);
         }
     };
 
-    const handleNextWord = () => {
-        getRandomWord();
+    const getScoreColor = (score: number | undefined) => {
+        if (score === undefined) return 'text-gray-700';
+        if (score >= 8.0) return 'text-success';
+        if (score >= 6.0) return 'text-warning';
+        return 'text-danger';
     };
 
-    const getDifficultyColor = (difficulty: Difficulty) => {
-        switch (difficulty) {
-            case "Beginner":
-                return "bg-green-200 text-green-800";
-            case "Intermediate":
-                return "bg-yellow-200 text-yellow-800";
-            case "Advanced":
-                return "bg-red-200 text-red-800";
-            default:
-                return "bg-gray-200 text-gray-800";
-        }
-    };
-
-    if (!currentWord) {
-        return <div className="flex justify-center items-center h-screen">Loading word...</div>;
-    }
+    if (!currentWord) return <div className="flex justify-center items-center h-screen">Loading Word...</div>;
 
     return (
         <div className="container mx-auto p-4 max-w-3xl">
-            <h1 className="text-4xl md:text-5xl font-extrabold text-center mb-8 text-gray-800 leading-tight">Word Challenge</h1>
-
-            <div className="bg-white p-8 rounded-2xl shadow-xl mb-6 border border-gray-100 transform hover:scale-105 transition-transform duration-300 ease-in-out">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-                    <h2 className="text-3xl md:text-4xl font-bold text-primary mb-2 sm:mb-0">{currentWord.word}</h2>
-                    <span className={`px-4 py-1 rounded-full text-sm font-semibold ${getDifficultyColor(currentWord.difficulty)} shadow-md`}>
+            <h1 className="text-4xl md:text-5xl font-extrabold text-center mb-8 text-gray-800">Word Challenge</h1>
+            <div className="bg-white p-8 rounded-2xl shadow-xl mb-6 border border-gray-100">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-3xl font-bold text-primary">{currentWord.word}</h2>
+                    <span className={`px-4 py-1 rounded-full text-sm font-semibold ${currentWord.difficulty === 'Advanced' ? 'bg-red-200 text-red-800' : currentWord.difficulty === 'Intermediate' ? 'bg-yellow-200 text-yellow-800' : 'bg-green-200 text-green-800'}`}>
                         {currentWord.difficulty}
                     </span>
                 </div>
-                <p className="text-lg md:text-xl text-gray-700 mb-6 leading-relaxed">{currentWord.meaning}</p>
-
+                <p className="text-lg text-gray-700 mb-6">{currentWord.meaning}</p>
+                
                 <div className="mb-6">
-                    <label htmlFor="sentence" className="block text-base font-medium text-gray-700 mb-2">Your Sentence:</label>
                     <textarea
-                        id="sentence"
-                        className="w-full p-4 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition duration-200 ease-in-out resize-y text-lg"
+                        className="w-full p-4 border border-gray-300 rounded-lg text-lg focus:ring-2 focus:ring-primary outline-none"
                         rows={4}
-                        placeholder="Type your sentence here..."
+                        placeholder="แต่งประโยคภาษาอังกฤษโดยใช้คำศัพท์ด้านบน..."
                         value={sentence}
                         onChange={handleSentenceChange}
-                        disabled={isSubmitted}
+                        disabled={isSubmitted || isLoading}
                     ></textarea>
                 </div>
 
-                <div className="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0">
-                    <p className="text-2xl font-bold">Score: <span className={`${feedbackColor} transition-colors duration-300`}>{score.toFixed(1)}</span></p>
-                    <div className="flex space-x-3">
-                        {!isSubmitted ? (
-                            <button
-                                onClick={handleSubmitSentence}
-                                className="px-6 py-3 bg-primary text-white rounded-lg hover:bg-secondary transition duration-200 ease-in-out font-medium shadow-md"
-                                disabled={!sentence.trim()}
-                            >
-                                Submit Sentence
-                            </button>
-                        ) : (
-                            <button
-                                onClick={handleNextWord}
-                                className="px-6 py-3 bg-info text-white rounded-lg hover:bg-blue-700 transition duration-200 ease-in-out font-medium shadow-md"
-                            >
-                                Next Word
-                            </button>
-                        )}
+                {apiResult && (
+                    <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
+                        <h3 className="text-xl font-bold text-gray-800">ผลการตรวจ:</h3>
+                        <p className={`text-3xl font-bold ${getScoreColor(apiResult.score)}`}>
+                            {apiResult.score.toFixed(1)} / 10.0
+                        </p>
+                        <p className="text-gray-700 mt-2"><strong>คำแนะนำ:</strong> {apiResult.suggestion}</p>
                     </div>
-                </div>
+                )}
+
+                <button
+                    onClick={isSubmitted ? getRandomWord : handleSubmitSentence}
+                    className="w-full py-3 bg-primary text-white rounded-lg hover:bg-indigo-700 transition font-bold text-lg shadow-md disabled:opacity-50"
+                    disabled={!sentence.trim() || isLoading}
+                >
+                    {isLoading ? 'Loading...' : (isSubmitted ? 'ฝึกคำต่อไป (Next Word)' : 'ส่งตรวจ (Submit)')}
+                </button>
             </div>
         </div>
     );
